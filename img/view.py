@@ -30,4 +30,12 @@ def show_tensor(tensors, direction=0, timeout=1000):
     cv2.imshow("view", show_img)
     cv2.waitKey(timeout)
 
+def show_pil_img(pil_img, timeout=1000, is_float =False):
+    im = np.array(pil_img)
+    if is_float:
+        im = util.img_as_ubyte(im)
+    im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
+    cv2.imshow("view", im)
+    cv2.waitKey(timeout)
+
 
