@@ -4,6 +4,7 @@ from numpy import random
 import types
 import numbers
 from PIL import Image, ImageOps, ImageEnhance
+import math
 
 def _is_numpy_image(img):
     return isinstance(img, np.ndarray) and (img.ndim in {2, 3})
@@ -266,6 +267,57 @@ class RandomVerticalMirror(object):
         else:
             return img, boxes, classes
 
+class RandomRotation(object):
+    def __init__(self, degrees, same_size=False):
+        if isinstance(degrees, numbers.Number):
+            if degrees < 0:
+                raise ValueError("If degrees is a single number, it must be positive.")
+            self.degrees = (-degrees, degrees)
+        elif isinstance(degrees, list) or isinstance(degrees, tuple) or isinstance(degrees, np.ndarray):
+            if len(degrees) != 2:
+                raise ValueError("If degrees is a sequence, it must be of len 2.")
+            self.degrees = degrees
+        else:
+            raise Exception('degrees must in Number or list or tuple or np.ndarray')
+        self.same_size = same_size
+
+    def __call__(self, img, boxes, classes):
+        w = img.shape[1]
+        h = img.shape[0]
+        angle = np.random.uniform(self.degrees[0], self.degrees[1])
+
+        if self.same_size:
+            nw = w
+            nh = h
+        else:
+            # 角度变弧度
+            rangle = np.deg2rad(angle)
+            # 计算旋转之后图像的w, h
+            nw = (abs(np.sin(rangle) * h) + abs(np.cos(rangle) * w))
+            nh = (abs(np.cos(rangle) * h) + abs(np.sin(rangle) * w))
+        # 构造仿射矩阵
+        rot_mat = cv2.getRotationMatrix2D((nw * 0.5, nh * 0.5), angle, 1)
+        # 计算原图中心点到新图中心点的偏移量
+        rot_move = np.dot(rot_mat, np.array([(nw - w) * 0.5, (nh - h) * 0.5, 0]))
+        # 更新仿射矩阵
+        rot_mat[0, 2] += rot_move[0]
+        rot_mat[1, 2] += rot_move[1]
+        # 仿射变换
+        rot_img = cv2.warpAffine(img, rot_mat, (int(math.ceil(nw)), int(math.ceil(nh))), flags=cv2.INTER_LANCZOS4)
+
+        # ---------------------- 矫正bbox坐标 ----------------------
+        # rot_mat是最终的旋转矩阵
+        # 获取原始bbox的四个中点，然后将这四个点转换到旋转后的坐标系下
+        rot_text_polys = list()
+        for bbox in boxes:
+            point1 = np.dot(rot_mat, np.array([bbox[0, 0], bbox[0, 1], 1]))
+            point2 = np.dot(rot_mat, np.array([bbox[1, 0], bbox[1, 1], 1]))
+            point3 = np.dot(rot_mat, np.array([bbox[2, 0], bbox[2, 1], 1]))
+            point4 = np.dot(rot_mat, np.array([bbox[3, 0], bbox[3, 1], 1]))
+            rot_text_polys.append([point1, point2, point3, point4])
+        return rot_img, np.array(rot_text_polys, dtype=np.float32),classes
+
+
 class ColorJitter(object):
     """Randomly change the brightness, contrast and saturation of an image.
     Args:
@@ -377,6 +429,7 @@ def test_ops(im, boxes, classes):
         RandomHorizontalMirror(),
         RandomVerticalMirror(),
         ColorJitter(brightness=1,contrast=0.5, saturation=0.8,hue=0.3),
+        #RandomRotation(10),
         ToAbsoluteCoords()
     ])
     im, boxes,classes = augment(im,boxes,classes)
@@ -394,7 +447,7 @@ if __name__ == "__main__":
     boxes = np.array(boxes)
     #show_img("raw",im,boxes)
 
-    ops = ColorJitter(brightness=1)
+    ops = RandomRotation(degrees=10)
     im_result,boxes,_ = test_ops(im_origin, boxes,0)
     #im_result, boxes, _ = ops(im_origin, boxes, 0)
     boxes = boxes.astype(np.int)
