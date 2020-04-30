@@ -232,7 +232,7 @@ class Compose_Image(object):
 class ToPointsCoords(object):
     def __call__(self, img, boxes, classes):
         """
-        The input boxes is as [x,y,w,h], the output shoulde be [[x0,y0],[x1,y1]]
+        The input boxes is as [x0,y0,x1,y1], the output shoulde be [[x0,y0],[x1,y1]]
         :param img:
         :param boxes:
         :param classes:
@@ -240,7 +240,22 @@ class ToPointsCoords(object):
         """
         new_boxes = list()
         for box in boxes:
-            new_box = [[box[0],box[1]],[box[0]+box[2],box[1]+box[3]]]
+            new_box = [[box[0],box[1]],[box[2],box[3]]]
+            new_boxes.append(new_box)
+        return img, np.array(new_boxes), classes
+    
+class ToBoxesCoords(object):
+    def __call__(self, img, boxes, classes):
+        """
+        The input boxes is as [[x0,y0],[x1,y1]], the output shoulde be [x0,y0,x1,y1]
+        :param img:
+        :param boxes:
+        :param classes:
+        :return: the boxes as [[x0,y0],[x1,y1]]
+        """
+        new_boxes = list()
+        for box in boxes:
+            new_box = [box[0][0],box[0][1],box[1][0],box[1][1]]
             new_boxes.append(new_box)
         return img, np.array(new_boxes), classes
 
@@ -434,19 +449,20 @@ class ColorJitter(object):
 
 def show_img(name,img, boxes):
     for box in boxes[:,]:
-        cv2.rectangle(img,(box[0][0],box[0][1]), (box[1][0],box[1][1]),(255,0,0), thickness=2)
+        cv2.rectangle(img,(box[0],box[1]),(box[2],box[3]),(255,0,0), thickness=2)
     cv2.imshow(name,img)
 
 def test_ops(im, boxes, classes):
     augment = Compose([
-        ToPointsCoords(),
+        #ToPointsCoords(),
         ToPercentCoords(),
         Resize((500,500)),
         RandomHorizontalMirror(),
         RandomVerticalMirror(),
         ColorJitter(brightness=1,contrast=0.5, saturation=0.8,hue=0.3),
         #RandomRotation(10),
-        ToAbsoluteCoords()
+        ToAbsoluteCoords(),
+        ToBoxesCoords()
     ])
     im, boxes,classes = augment(im,boxes,classes)
     return im,boxes,classes
@@ -456,12 +472,11 @@ if __name__ == "__main__":
     im = cv2.imread(file)
     im_origin = im.copy()
     boxes = list()
-    boxes1 = [10,20,50,80]
-    boxes2 = [90,100,150,120]
+    boxes1 = [[10,20],[50,80]]
+    boxes2 = [[90,100],[150,120]]
     boxes.append(boxes1)
     boxes.append(boxes2)
     boxes = np.array(boxes)
-    #show_img("raw",im,boxes)
 
     ops = RandomRotation(degrees=10)
     im_result,boxes,_ = test_ops(im_origin, boxes,0)

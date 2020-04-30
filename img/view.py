@@ -2,9 +2,32 @@ import torch
 import numpy as np
 import cv2
 from skimage import util
+import types
 
 DIRECTION_HORIZONTAL = 0
 DIRECTION_VERTICAL =1
+
+def show_single_tensor_boxes(tensor, boxes, percent=True, timeout=1000):
+
+    def percent_to_absolute(im, boxes):
+        h,w,c = im.shape
+        boxes[:,0] *= w
+        boxes[:,1] *= h
+        boxes[:,2] *= w
+        boxes[:,3] *= h
+        boxes = boxes.astype(np.int)
+        return boxes
+    data = tensor.cpu().numpy().transpose(1, 2, 0)
+    #data = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
+    if percent:
+        if isinstance(boxes, list):
+            boxes = np.array(boxes)
+        boxes = percent_to_absolute(data,boxes)
+    boxes = boxes.astype(np.int)
+    for box in boxes:
+        cv2.rectangle(data, (box[0],box[1]),(box[2],box[3]),(255,0,0),thickness=2)
+    cv2.imshow("view",data)
+    cv2.waitKey(timeout)
 
 def show_batch_tensor(batch_tensor, direction=0, timeout=1000):
     if batch_tensor.ndim ==3:
