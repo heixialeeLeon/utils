@@ -6,11 +6,19 @@ from skimage import util
 DIRECTION_HORIZONTAL = 0
 DIRECTION_VERTICAL =1
 
+def show_batch_tensor(batch_tensor, direction=0, timeout=1000):
+    if batch_tensor.ndim ==3:
+        tensor_list=[batch_tensor]
+    else:
+        tensor_list = [item for item in batch_tensor[:, ]]
+    show_tensor(tensor_list,direction=0, timeout=1000)
+
 def show_tensor(tensors, direction=0, timeout=1000):
     is_first_image = True
     show_img = None
     for data in tensors:
         print(data.shape)
+        channel = 0
         if data.ndim == 4:
             data = torch.squeeze(data).data.cpu().numpy().transpose(1, 2, 0)
             channel = data.shape[1]
