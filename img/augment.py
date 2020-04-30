@@ -1,6 +1,12 @@
 import cv2
 import numpy as np
 from numpy import random
+import types
+import numbers
+from PIL import Image, ImageOps, ImageEnhance
+
+def _is_numpy_image(img):
+    return isinstance(img, np.ndarray) and (img.ndim in {2, 3})
 
 def horizontal_flip(im, boxes=None,classes=None):
     flip_boxes = boxes.copy()
@@ -16,6 +22,176 @@ def veritcal_flip(im, boxes=None,classes=None):
     flip_boxes[:,:,1] = 1 - boxes[:,:,1]
     return im, flip_boxes,classes
 
+def adjust_brightness(img, brightness_factor):
+    """Adjust brightness of an Image.
+    Args:
+        img (numpy ndarray): numpy ndarray to be adjusted.
+        brightness_factor (float):  How much to adjust the brightness. Can be
+            any non negative number. 0 gives a black image, 1 gives the
+            original image while 2 increases the brightness by a factor of 2.
+    Returns:
+        numpy ndarray: Brightness adjusted image.
+    """
+    if not _is_numpy_image(img):
+        raise TypeError('img should be numpy Image. Got {}'.format(type(img)))
+    table = np.array([ i*brightness_factor for i in range (0,256)]).clip(0,255).astype('uint8')
+    # same thing but a bit slower
+    # cv2.convertScaleAbs(img, alpha=brightness_factor, beta=0)
+    if img.shape[2]==1:
+        return cv2.LUT(img, table)[:,:,np.newaxis]
+    else:
+        return cv2.LUT(img, table)
+
+def adjust_contrast(img, contrast_factor):
+    """Adjust contrast of an mage.
+    Args:
+        img (numpy ndarray): numpy ndarray to be adjusted.
+        contrast_factor (float): How much to adjust the contrast. Can be any
+            non negative number. 0 gives a solid gray image, 1 gives the
+            original image while 2 increases the contrast by a factor of 2.
+    Returns:
+        numpy ndarray: Contrast adjusted image.
+    """
+    # much faster to use the LUT construction than anything else I've tried
+    # it's because you have to change dtypes multiple times
+    if not _is_numpy_image(img):
+        raise TypeError('img should be numpy Image. Got {}'.format(type(img)))
+    table = np.array([ (i-74)*contrast_factor+74 for i in range (0,256)]).clip(0,255).astype('uint8')
+    # enhancer = ImageEnhance.Contrast(img)
+    # img = enhancer.enhance(contrast_factor)
+    if img.shape[2]==1:
+        return cv2.LUT(img, table)[:,:,np.newaxis]
+    else:
+        return cv2.LUT(img,table)
+
+def adjust_saturation(img, saturation_factor):
+    """Adjust color saturation of an image.
+    Args:
+        img (numpy ndarray): numpy ndarray to be adjusted.
+        saturation_factor (float):  How much to adjust the saturation. 0 will
+            give a black and white image, 1 will give the original image while
+            2 will enhance the saturation by a factor of 2.
+    Returns:
+        numpy ndarray: Saturation adjusted image.
+    """
+    # ~10ms slower than PIL!
+    if not _is_numpy_image(img):
+        raise TypeError('img should be numpy Image. Got {}'.format(type(img)))
+    img = Image.fromarray(img)
+    enhancer = ImageEnhance.Color(img)
+    img = enhancer.enhance(saturation_factor)
+    return np.array(img)
+
+def adjust_hue(img, hue_factor):
+    """Adjust hue of an image.
+    The image hue is adjusted by converting the image to HSV and
+    cyclically shifting the intensities in the hue channel (H).
+    The image is then converted back to original image mode.
+    `hue_factor` is the amount of shift in H channel and must be in the
+    interval `[-0.5, 0.5]`.
+    See `Hue`_ for more details.
+    .. _Hue: https://en.wikipedia.org/wiki/Hue
+    Args:
+        img (numpy ndarray): numpy ndarray to be adjusted.
+        hue_factor (float):  How much to shift the hue channel. Should be in
+            [-0.5, 0.5]. 0.5 and -0.5 give complete reversal of hue channel in
+            HSV space in positive and negative direction respectively.
+            0 means no shift. Therefore, both -0.5 and 0.5 will give an image
+            with complementary colors while 0 gives the original image.
+    Returns:
+        numpy ndarray: Hue adjusted image.
+    """
+    # After testing, found that OpenCV calculates the Hue in a call to
+    # cv2.cvtColor(..., cv2.COLOR_BGR2HSV) differently from PIL
+
+    # This function takes 160ms! should be avoided
+    if not(-0.5 <= hue_factor <= 0.5):
+        raise ValueError('hue_factor is not in [-0.5, 0.5].'.format(hue_factor))
+    if not _is_numpy_image(img):
+        raise TypeError('img should be numpy Image. Got {}'.format(type(img)))
+    img = Image.fromarray(img)
+    input_mode = img.mode
+    if input_mode in {'L', '1', 'I', 'F'}:
+        return np.array(img)
+
+    h, s, v = img.convert('HSV').split()
+
+    np_h = np.array(h, dtype=np.uint8)
+    # uint8 addition take cares of rotation across boundaries
+    with np.errstate(over='ignore'):
+        np_h += np.uint8(hue_factor * 255)
+    h = Image.fromarray(np_h, 'L')
+
+    img = Image.merge('HSV', (h, s, v)).convert(input_mode)
+    return np.array(img)
+
+def adjust_gamma(img, gamma, gain=1):
+    r"""Perform gamma correction on an image.
+    Also known as Power Law Transform. Intensities in RGB mode are adjusted
+    based on the following equation:
+    .. math::
+        I_{\text{out}} = 255 \times \text{gain} \times \left(\frac{I_{\text{in}}}{255}\right)^{\gamma}
+    See `Gamma Correction`_ for more details.
+    .. _Gamma Correction: https://en.wikipedia.org/wiki/Gamma_correction
+    Args:
+        img (numpy ndarray): numpy ndarray to be adjusted.
+        gamma (float): Non negative real number, same as :math:`\gamma` in the equation.
+            gamma larger than 1 make the shadows darker,
+            while gamma smaller than 1 make dark regions lighter.
+        gain (float): The constant multiplier.
+    """
+    if not _is_numpy_image(img):
+        raise TypeError('img should be numpy Image. Got {}'.format(type(img)))
+
+    if gamma < 0:
+        raise ValueError('Gamma should be a non-negative real number')
+    # from here
+    # https://stackoverflow.com/questions/33322488/how-to-change-image-illumination-in-opencv-python/41061351
+    table = np.array([((i / 255.0) ** gamma) * 255 * gain
+                      for i in np.arange(0, 256)]).astype('uint8')
+    if img.shape[2]==1:
+        return cv2.LUT(img, table)[:,:,np.newaxis]
+    else:
+        return cv2.LUT(img,table)
+
+def rotate(img, angle, resample=False, expand=False, center=None):
+    """Rotate the image by angle.
+    Args:
+        img (numpy ndarray): numpy ndarray to be rotated.
+        angle (float or int): In degrees degrees counter clockwise order.
+        resample (``PIL.Image.NEAREST`` or ``PIL.Image.BILINEAR`` or ``PIL.Image.BICUBIC``, optional):
+            An optional resampling filter. See `filters`_ for more information.
+            If omitted, or if the image has mode "1" or "P", it is set to ``PIL.Image.NEAREST``.
+        expand (bool, optional): Optional expansion flag.
+            If true, expands the output image to make it large enough to hold the entire rotated image.
+            If false or omitted, make the output image the same size as the input image.
+            Note that the expand flag assumes rotation around the center and no translation.
+        center (2-tuple, optional): Optional center of rotation.
+            Origin is the upper left corner.
+            Default is the center of the image.
+    .. _filters: https://pillow.readthedocs.io/en/latest/handbook/concepts.html#filters
+    """
+    if not _is_numpy_image(img):
+        raise TypeError('img should be numpy Image. Got {}'.format(type(img)))
+    rows,cols = img.shape[0:2]
+    if center is None:
+        center = (cols/2, rows/2)
+    M = cv2.getRotationMatrix2D(center,angle,1)
+    if img.shape[2]==1:
+        return cv2.warpAffine(img,M,(cols,rows))[:,:,np.newaxis]
+    else:
+        return cv2.warpAffine(img,M,(cols,rows))
+
+class Lambda(object):
+    """Applies a lambda as a transform."""
+
+    def __init__(self, lambd):
+        assert isinstance(lambd, types.LambdaType)
+        self.lambd = lambd
+
+    def __call__(self, img):
+        return self.lambd(img)
+
 class Compose(object):
     def __init__(self, transforms):
         self.transforms = transforms
@@ -24,6 +200,33 @@ class Compose(object):
         for t in self.transforms:
             img, boxes, classes = t(img, boxes,classes)
         return img, boxes, classes
+
+class Compose_Image(object):
+    """Composes several transforms together.
+    Args:
+        transforms (list of ``Transform`` objects): list of transforms to compose.
+    Example:
+        >>> transforms.Compose([
+        >>>     transforms.CenterCrop(10),
+        >>>     transforms.ToTensor(),
+        >>> ])
+    """
+
+    def __init__(self, transforms):
+        self.transforms = transforms
+
+    def __call__(self, img):
+        for t in self.transforms:
+            img = t(img)
+        return img
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        for t in self.transforms:
+            format_string += '\n'
+            format_string += '    {0}'.format(t)
+        format_string += '\n)'
+        return format_string
 
 class ToAbsoluteCoords(object):
     def __call__(self, img, boxes=None, classes=None):
@@ -63,6 +266,105 @@ class RandomVerticalMirror(object):
         else:
             return img, boxes, classes
 
+class ColorJitter(object):
+    """Randomly change the brightness, contrast and saturation of an image.
+    Args:
+        brightness (float or tuple of float (min, max)): How much to jitter brightness.
+            brightness_factor is chosen uniformly from [max(0, 1 - brightness), 1 + brightness]
+            or the given [min, max]. Should be non negative numbers.
+        contrast (float or tuple of float (min, max)): How much to jitter contrast.
+            contrast_factor is chosen uniformly from [max(0, 1 - contrast), 1 + contrast]
+            or the given [min, max]. Should be non negative numbers.
+        saturation (float or tuple of float (min, max)): How much to jitter saturation.
+            saturation_factor is chosen uniformly from [max(0, 1 - saturation), 1 + saturation]
+            or the given [min, max]. Should be non negative numbers.
+        hue (float or tuple of float (min, max)): How much to jitter hue.
+            hue_factor is chosen uniformly from [-hue, hue] or the given [min, max].
+            Should have 0<= hue <= 0.5 or -0.5 <= min <= max <= 0.5.
+    """
+    def __init__(self, brightness=0, contrast=0, saturation=0, hue=0):
+        self.brightness = self._check_input(brightness, 'brightness')
+        self.contrast = self._check_input(contrast, 'contrast')
+        self.saturation = self._check_input(saturation, 'saturation')
+        self.hue = self._check_input(hue, 'hue', center=0, bound=(-0.5, 0.5),
+                                     clip_first_on_zero=False)
+        if self.saturation is not None:
+            print('Saturation jitter enabled. Will slow down loading immensely.')
+        if self.hue is not None:
+            print('Hue jitter enabled. Will slow down loading immensely.')
+
+    def _check_input(self, value, name, center=1, bound=(0, float('inf')), clip_first_on_zero=True):
+        if isinstance(value, numbers.Number):
+            if value < 0:
+                raise ValueError("If {} is a single number, it must be non negative.".format(name))
+            value = [center - value, center + value]
+            if clip_first_on_zero:
+                value[0] = max(value[0], 0)
+        elif isinstance(value, (tuple, list)) and len(value) == 2:
+            if not bound[0] <= value[0] <= value[1] <= bound[1]:
+                raise ValueError("{} values should be between {}".format(name, bound))
+        else:
+            raise TypeError("{} should be a single number or a list/tuple with length 2.".format(name))
+
+        # if value is 0 or (1., 1.) for brightness/contrast/saturation
+        # or (0., 0.) for hue, do nothing
+        if value[0] == value[1] == center:
+            value = None
+        return value
+
+    @staticmethod
+    def get_params(brightness, contrast, saturation, hue):
+        """Get a randomized transform to be applied on image.
+        Arguments are same as that of __init__.
+        Returns:
+            Transform which randomly adjusts brightness, contrast and
+            saturation in a random order.
+        """
+        transforms = []
+
+        if brightness is not None:
+            brightness_factor = random.uniform(brightness[0], brightness[1])
+            transforms.append(Lambda(lambda img: adjust_brightness(img, brightness_factor)))
+
+        if contrast is not None:
+            contrast_factor = random.uniform(contrast[0], contrast[1])
+            transforms.append(Lambda(lambda img: adjust_contrast(img, contrast_factor)))
+
+        if saturation is not None:
+            saturation_factor = random.uniform(saturation[0], saturation[1])
+            transforms.append(Lambda(lambda img: adjust_saturation(img, saturation_factor)))
+
+        if hue is not None:
+            hue_factor = random.uniform(hue[0], hue[1])
+            transforms.append(Lambda(lambda img: adjust_hue(img, hue_factor)))
+
+        random.shuffle(transforms)
+        transform = Compose_Image(transforms)
+
+        return transform
+
+    def __call__(self, img, boxes, classes):
+        """
+        Args:
+            img (numpy ndarray): Input image.
+        Returns:
+            numpy ndarray: Color jittered image.
+        """
+        transform = self.get_params(self.brightness, self.contrast,
+                                    self.saturation, self.hue)
+        img = transform(img)
+        return img, boxes,classes
+        return transform(img),boxes,classes
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        format_string += 'brightness={0}'.format(self.brightness)
+        format_string += ', contrast={0}'.format(self.contrast)
+        format_string += ', saturation={0}'.format(self.saturation)
+        format_string += ', hue={0})'.format(self.hue)
+        return format_string
+
+
 def show_img(name,img, boxes):
     for box in boxes[:,]:
         cv2.rectangle(img,(box[0][0],box[0][1]), (box[1][0],box[1][1]),(255,0,0), thickness=2)
@@ -74,6 +376,7 @@ def test_ops(im, boxes, classes):
         Resize((500,500)),
         RandomHorizontalMirror(),
         RandomVerticalMirror(),
+        ColorJitter(brightness=1,contrast=0.5, saturation=0.8,hue=0.3),
         ToAbsoluteCoords()
     ])
     im, boxes,classes = augment(im,boxes,classes)
@@ -89,10 +392,11 @@ if __name__ == "__main__":
     boxes.append(boxes1)
     boxes.append(boxes2)
     boxes = np.array(boxes)
-    show_img("raw",im,boxes)
+    #show_img("raw",im,boxes)
 
-    ops = RandomHorizontalMirror()
+    ops = ColorJitter(brightness=1)
     im_result,boxes,_ = test_ops(im_origin, boxes,0)
     #im_result, boxes, _ = ops(im_origin, boxes, 0)
+    boxes = boxes.astype(np.int)
     show_img("resize",im_result,boxes)
     cv2.waitKey(0)
